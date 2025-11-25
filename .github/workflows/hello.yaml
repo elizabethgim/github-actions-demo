@@ -7,6 +7,6 @@ jobs:
     env:
       COURSE: CloudComputing
     steps:
-    - run: echo "Hello from GitHub Actions!"
+    - run: echo "Hello from #{COURSE}!"
     - run: echo "I'll list files."
     - run: ls -al
