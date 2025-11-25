@@ -17,3 +17,4 @@ jobs:
     steps:
       - run: echo "Goodbye from ${COURSE}!"
       - run: ls -al
+      - run: echo "${{ secrets.MY_SECRET }}"
