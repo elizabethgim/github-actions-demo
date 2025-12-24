@@ -1,0 +1,73 @@
+name: Calc App CD Pipeline
+
+on:
+  workflow_run:
+    workflows: ["Calc App Build Test"]
+    types:
+      - completed
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # 1) Determine image URIs from artifacts (from CI workflow run)
+      - name: Download image URI artifacts
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          run_id: ${{ github.event.workflow_run.id }}
+          name: image-uris
+          path: ./_artifacts
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set TF_VARs (image URIs + FE/BE URLs)
+        run: |
+          echo "TF_VAR_backend_image_uri=$(cat ./_artifacts/be-image-uri.txt)" >> $GITHUB_ENV
+          echo "TF_VAR_frontend_image_uri=$(cat ./_artifacts/fe-image-uri.txt)" >> $GITHUB_ENV
+          echo "TF_VAR_frontend_url=${{ vars.FRONTEND_URL }}" >> $GITHUB_ENV
+          echo "TF_VAR_backend_url=${{ vars.BACKEND_URL }}" >> $GITHUB_ENV
+          echo "TF_VAR_aws_region=${{ vars.AWS_REGION }}" >> $GITHUB_ENV
+          echo "TF_VAR_ecr_account_id=${{ secrets.ECR_ACCOUNT_ID }}" >> $GITHUB_ENV
+
+      # 2) Configure AWS credentials & verify caller identity
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: arn:aws:iam::${{ secrets.ECR_ACCOUNT_ID }}:role/cas3135-ta-1-gha-role
+          role-session-name: GitHubActions
+
+      - name: Verify caller identity
+        run: aws sts get-caller-identity
+
+      # 3) Set up kubeconfig from repo secret (base64 decode -> temp file)
+      - name: Write kubeconfig to temp file
+        run: |
+          echo '${{ secrets.KUBECONFIG_BASE64 }}' | tr -d '\n' | base64 -d > /tmp/kubeconfig
+          chmod 600 /tmp/kubeconfig
+          echo "TF_VAR_kubernetes_config_path=/tmp/kubeconfig" >> $GITHUB_ENV
+
+      # 4) Set up Terraform client
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      # 5) Terraform init & apply
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform apply
+        working-directory: terraform
+        run: terraform apply --auto-approve
