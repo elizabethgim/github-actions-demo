@@ -1,28 +1,29 @@
 name: Calc App CD Pipeline
 
-on:
-  workflow_run:
-    workflows: ["Calc App CI Pipeline"]  
-    types:
-      - completed
-    branches:
-      - main
-  workflow_dispatch:  
-
 permissions:
+  id-token: write
   actions: read
   contents: read
-  id-token: write
+
+on:
+  workflow_run:
+    workflows: ["Calc App CI Pipeline"]
+    types:
+      - completed
+  workflow_dispatch:
 
 jobs:
   deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
-    
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # ✅ Build workflow에서 올린 artifact를 "그 run-id"로 정확히 받아오기
       - name: Download Image URI Artifacts
         uses: actions/download-artifact@v4
         with:
@@ -34,42 +35,38 @@ jobs:
         run: |
           IMAGE_URI_BE=$(cat image_uri_be.txt)
           IMAGE_URI_FE=$(cat image_uri_fe.txt)
+
           echo "TF_VAR_container_image_be=${IMAGE_URI_BE}" >> $GITHUB_ENV
           echo "TF_VAR_container_image_fe=${IMAGE_URI_FE}" >> $GITHUB_ENV
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::${{ secrets.ECR_ACCOUNT_ID }}:role/cas3135-2022118008-gha-role
-          aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Verify Caller Identity
-        run: |
-          aws sts get-caller-identity
-
-      - name: Setup Kubeconfig
-        run: |
-          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 --decode > /tmp/kubeconfig
-          chmod 600 /tmp/kubeconfig
-          echo "TF_VAR_kube_config_path=/tmp/kubeconfig" >> $GITHUB_ENV
-          echo "KUBE_CONFIG_PATH=/tmp/kubeconfig" >> $GITHUB_ENV
-
-      - name: Setup Environment Variables for URI References
-        run: |
-          echo "TF_VAR_backend_url=${{ vars.BACKEND_URL }}" >> $GITHUB_ENV
-          echo "TF_VAR_frontend_url=${{ vars.FRONTEND_URL }}" >> $GITHUB_ENV
-          echo "TF_VAR_aws_region=${{ vars.AWS_REGION }}" >> $GITHUB_ENV
-          echo "TF_VAR_kubernetes_config_path=/tmp/kubeconfig" >> $GITHUB_ENV>> $GITHUB_ENV
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.6.6
 
+      - name: Setup Kubeconfig
+        env:
+          KUBECONFIG_BASE64: ${{ secrets.KUBECONFIG_BASE64 }}
+        run: |
+          echo "${KUBECONFIG_BASE64}" | base64 --decode > /tmp/kubeconfig
+          echo "TF_VAR_kubernetes_config_path=/tmp/kubeconfig" >> $GITHUB_ENV
+
+      - name: Setup Environment Variables for URI References
+        run: |
+          echo "TF_VAR_backend_url=${{ vars.BACKEND_URL }}" >> $GITHUB_ENV
+          echo "TF_VAR_frontend_url=${{ vars.FRONTEND_URL }}" >> $GITHUB_ENV
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::975049962487:role/cas3135-2024148030-gha-role
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-terraform
+
       - name: Terraform Init
         run: |
-          cd terraform && terraform init
+          (cd terraform && terraform init)
 
       - name: Terraform Apply
         run: |
-          cd terraform && terraform apply -auto-approve
+          (cd terraform && terraform apply -auto-approve)
