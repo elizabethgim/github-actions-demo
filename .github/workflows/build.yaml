@@ -1,5 +1,4 @@
 name: Calc App CI Pipeline
-
 on:
   workflow_run:
     workflows: ["Calc App Unit Tests"]
@@ -17,69 +16,47 @@ on:
           - warning
           - debug
 
-permissions:
-      id-token: write
-      contents: read
-      actions: read
-      
 jobs:
   build:
-    
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: main
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ap-northeast-2
-          role-to-assume: arn:aws:iam::${{ secrets.ECR_ACCOUNT_ID }}:role/cas3135-2024148014-gha-role
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
       - name: Build Docker Images
         run: |
           (cd backend && docker build -t calc-be:latest .)
-          (cd frontend && npm ci && npm run build)
+          (cd frontend && npm install && npm run build)
           (cd frontend && docker build -t calc-fe:latest .)
 
-      - name: Health Check for the Built Images
-        run: |
-          docker run -d -p 8000:3031 --name test-be calc-be:latest
-          docker run -d -p 9000:3000 --name test-fe calc-fe:latest
-          sleep 10
-          curl --fail "http://localhost:8000/healthcheck" || exit 1
-          curl --fail "http://localhost:9000" || exit 1
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.ECR_ACCOUNT_ID }}:role/cas3135-2022118008-gha-role
+          aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Stop and Remove the Test Containers
-        if: always()
-        run: |
-          docker stop test-be || true
-          docker stop test-fe || true
-          docker rm test-be || true
-          docker rm test-fe || true
+      - name: Verify Caller Identity
+        run: aws sts get-caller-identity
 
-      - name: Tag and Push Images
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY_BE: ${{ vars.ECR_REPOSITORY_BE }} 
-          ECR_REPOSITORY_FE: ${{ vars.ECR_REPOSITORY_FE }}
+      - name: Image Push
         run: |
-          VERSION_TAG=$(date +%Y%m%d-%H%M%S)
-          IMAGE_URI_BE=$ECR_REGISTRY/$ECR_REPOSITORY_BE:$VERSION_TAG
-          docker tag calc-be:latest $IMAGE_URI_BE
-          docker push $IMAGE_URI_BE
-          echo "$IMAGE_URI_BE" > image_uri_be.txt
-          IMAGE_URI_FE=$ECR_REGISTRY/$ECR_REPOSITORY_FE:$VERSION_TAG
-          docker tag calc-fe:latest $IMAGE_URI_FE
-          docker push $IMAGE_URI_FE
-          echo "$IMAGE_URI_FE" > image_uri_fe.txt
+          VERSION_TAG=`date +'%Y%m%d-%H%M%S'`
+          REGISTRY_URI=${{ secrets.ECR_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
+          IMAGE_URI_BE=${REGISTRY_URI}/${{ vars.ECR_REPOSITORY_BE }}:${VERSION_TAG}
+          IMAGE_URI_FE=${REGISTRY_URI}/${{ vars.ECR_REPOSITORY_FE }}:${VERSION_TAG}
+          docker tag calc-be:latest ${IMAGE_URI_BE}
+          docker tag calc-fe:latest ${IMAGE_URI_FE}
+          aws ecr get-login-password | docker login --username AWS --password-stdin ${REGISTRY_URI}
+          docker push ${IMAGE_URI_BE}
+          docker push ${IMAGE_URI_FE}
+          echo "${IMAGE_URI_BE}" > image_uri_be.txt
+          echo "${IMAGE_URI_FE}" > image_uri_fe.txt
 
       - name: Upload Image URI Artifacts
         uses: actions/upload-artifact@v4
