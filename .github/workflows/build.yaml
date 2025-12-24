@@ -40,7 +40,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::975049962487:role/cas3135-2024148030-gha-role
+          role-to-assume: arn:aws:iam::975049962487:role/cas3135-ta-1-gha-role
           aws-region: ${{ vars.AWS_REGION }}
           role-session-name: gha-terraform
 
