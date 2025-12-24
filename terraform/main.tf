@@ -2,7 +2,7 @@ terraform {
 
   backend "s3" {
     bucket         = "cas3135-2025-tfstates"
-    key            = "cas3135-2024148030/calc-k8s.tfstate"
+    key            = "cas3135-ta-1/calc-k8s.tfstate"
     region         = "ap-northeast-2"
     dynamodb_table = "cas3135-terraform-locks"
     encrypt        = true
