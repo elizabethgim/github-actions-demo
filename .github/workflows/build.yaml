@@ -1,74 +1,60 @@
-name: Calc App CI Pipeline
-
-permissions:
-  id-token: write
-  contents: read
+name: Calc App Build Pipeline
 
 on:
   workflow_run:
     workflows: ["Calc App Unit Tests"]
     types:
       - completed
-  workflow_dispatch:
-    inputs:
-      logLevel:
-        description: "Log Level"
-        required: true
-        default: "warning"
-        type: choice
-        options:
-          - info
-          - warning
-          - debug
 
 jobs:
   build:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: main
 
-      - name: Build Docker Images
+      - name: Build Frontend (React Build)
         run: |
-          (cd backend && docker build -t calc-be:latest .)
-          (cd frontend && npm ci && npm run build)
-          (cd frontend && docker build -t calc-fe:latest .)
+          cd frontend
+          npm ci
+          npm run build
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::975049962487:role/cas3135-ta-1-gha-role
           aws-region: ${{ vars.AWS_REGION }}
-          role-session-name: gha-terraform
 
-      - name: Image Push
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, Tag, and Push Images
         env:
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          ECR_ACCOUNT_ID: ${{ secrets.ECR_ACCOUNT_ID }}
-          ECR_REPOSITORY_BE: ${{ vars.ECR_REPOSITORY_BE }}
-          ECR_REPOSITORY_FE: ${{ vars.ECR_REPOSITORY_FE }}
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPO_BE: ${{ vars.ECR_REPOSITORY_BE }}
+          REPO_FE: ${{ vars.ECR_REPOSITORY_FE }}
         run: |
           VERSION_TAG=$(date +'%Y%m%d-%H%M%S')
-
-          REGISTRY_URI=${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-
-          IMAGE_URI_BE=${REGISTRY_URI}/${ECR_REPOSITORY_BE}:${VERSION_TAG}
-          IMAGE_URI_FE=${REGISTRY_URI}/${ECR_REPOSITORY_FE}:${VERSION_TAG}
-
-          aws ecr get-login-password --region ${AWS_REGION} \
-            | docker login --username AWS --password-stdin ${REGISTRY_URI}
-
-          docker tag calc-be:latest ${IMAGE_URI_BE}
-          docker tag calc-fe:latest ${IMAGE_URI_FE}
-
-          docker push ${IMAGE_URI_BE}
-          docker push ${IMAGE_URI_FE}
-
-          echo "${IMAGE_URI_BE}" > image_uri_be.txt
-          echo "${IMAGE_URI_FE}" > image_uri_fe.txt
+          
+          IMAGE_URI_BE=$REGISTRY/$REPO_BE:$VERSION_TAG
+          IMAGE_URI_FE=$REGISTRY/$REPO_FE:$VERSION_TAG
+          
+          # Backend 빌드 및 푸시
+          docker build -t $IMAGE_URI_BE ./backend
+          docker push $IMAGE_URI_BE
+          
+          # Frontend 빌드 및 푸시
+          docker build -t $IMAGE_URI_FE ./frontend
+          docker push $IMAGE_URI_FE
+          
+          echo "$IMAGE_URI_BE" > image_uri_be.txt
+          echo "$IMAGE_URI_FE" > image_uri_fe.txt
 
       - name: Upload Image URI Artifacts
         uses: actions/upload-artifact@v4
