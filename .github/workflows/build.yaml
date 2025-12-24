@@ -1,4 +1,9 @@
 name: Calc App CI Pipeline
+
+permissions:
+  id-token: write
+  contents: read
+
 on:
   workflow_run:
     workflows: ["Calc App Unit Tests"]
@@ -7,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       logLevel:
-        description: 'Log Level'
+        description: "Log Level"
         required: true
-        default: 'warning'
+        default: "warning"
         type: choice
         options:
           - info
@@ -18,11 +23,8 @@ on:
 
 jobs:
   build:
-    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,29 +34,39 @@ jobs:
       - name: Build Docker Images
         run: |
           (cd backend && docker build -t calc-be:latest .)
-          (cd frontend && npm install && npm run build)
+          (cd frontend && npm ci && npm run build)
           (cd frontend && docker build -t calc-fe:latest .)
 
-      - name: Configure AWS Credentials
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ secrets.ECR_ACCOUNT_ID }}:role/cas3135-2022118008-gha-role
+          role-to-assume: arn:aws:iam::975049962487:role/cas3135-2024148030-gha-role
           aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Verify Caller Identity
-        run: aws sts get-caller-identity
+          role-session-name: gha-terraform
 
       - name: Image Push
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          ECR_ACCOUNT_ID: ${{ secrets.ECR_ACCOUNT_ID }}
+          ECR_REPOSITORY_BE: ${{ vars.ECR_REPOSITORY_BE }}
+          ECR_REPOSITORY_FE: ${{ vars.ECR_REPOSITORY_FE }}
         run: |
-          VERSION_TAG=`date +'%Y%m%d-%H%M%S'`
-          REGISTRY_URI=${{ secrets.ECR_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
-          IMAGE_URI_BE=${REGISTRY_URI}/${{ vars.ECR_REPOSITORY_BE }}:${VERSION_TAG}
-          IMAGE_URI_FE=${REGISTRY_URI}/${{ vars.ECR_REPOSITORY_FE }}:${VERSION_TAG}
+          VERSION_TAG=$(date +'%Y%m%d-%H%M%S')
+
+          REGISTRY_URI=${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+
+          IMAGE_URI_BE=${REGISTRY_URI}/${ECR_REPOSITORY_BE}:${VERSION_TAG}
+          IMAGE_URI_FE=${REGISTRY_URI}/${ECR_REPOSITORY_FE}:${VERSION_TAG}
+
+          aws ecr get-login-password --region ${AWS_REGION} \
+            | docker login --username AWS --password-stdin ${REGISTRY_URI}
+
           docker tag calc-be:latest ${IMAGE_URI_BE}
           docker tag calc-fe:latest ${IMAGE_URI_FE}
-          aws ecr get-login-password | docker login --username AWS --password-stdin ${REGISTRY_URI}
+
           docker push ${IMAGE_URI_BE}
           docker push ${IMAGE_URI_FE}
+
           echo "${IMAGE_URI_BE}" > image_uri_be.txt
           echo "${IMAGE_URI_FE}" > image_uri_fe.txt
 
