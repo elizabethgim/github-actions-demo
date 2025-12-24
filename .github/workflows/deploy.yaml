@@ -2,72 +2,74 @@ name: Calc App CD Pipeline
 
 on:
   workflow_run:
-    workflows: ["Calc App Build Test"]
+    workflows: ["Calc App CI Pipeline"]  
     types:
       - completed
-  workflow_dispatch:
+    branches:
+      - main
+  workflow_dispatch:  
 
 permissions:
-  id-token: write
-  contents: read
   actions: read
+  contents: read
+  id-token: write
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          ref: main
 
-      # 1) Determine image URIs from artifacts (from CI workflow run)
-      - name: Download image URI artifacts
-        uses: dawidd6/action-download-artifact@v3
+      - name: Download Image URI Artifacts
+        uses: actions/download-artifact@v4
         with:
-          run_id: ${{ github.event.workflow_run.id }}
           name: image-uris
-          path: ./_artifacts
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set TF_VARs (image URIs + FE/BE URLs)
+      - name: Determine Image URIs
         run: |
-          echo "TF_VAR_backend_image_uri=$(cat ./_artifacts/be-image-uri.txt)" >> $GITHUB_ENV
-          echo "TF_VAR_frontend_image_uri=$(cat ./_artifacts/fe-image-uri.txt)" >> $GITHUB_ENV
-          echo "TF_VAR_frontend_url=${{ vars.FRONTEND_URL }}" >> $GITHUB_ENV
-          echo "TF_VAR_backend_url=${{ vars.BACKEND_URL }}" >> $GITHUB_ENV
-          echo "TF_VAR_aws_region=${{ vars.AWS_REGION }}" >> $GITHUB_ENV
-          echo "TF_VAR_ecr_account_id=${{ secrets.ECR_ACCOUNT_ID }}" >> $GITHUB_ENV
+          IMAGE_URI_BE=$(cat image_uri_be.txt)
+          IMAGE_URI_FE=$(cat image_uri_fe.txt)
+          echo "TF_VAR_container_image_be=${IMAGE_URI_BE}" >> $GITHUB_ENV
+          echo "TF_VAR_container_image_fe=${IMAGE_URI_FE}" >> $GITHUB_ENV
 
-      # 2) Configure AWS credentials & verify caller identity
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
+          role-to-assume: arn:aws:iam::${{ secrets.ECR_ACCOUNT_ID }}:role/cas3135-2022118008-gha-role
           aws-region: ${{ vars.AWS_REGION }}
-          role-to-assume: arn:aws:iam::${{ secrets.ECR_ACCOUNT_ID }}:role/cas3135-ta-1-gha-role
-          role-session-name: GitHubActions
 
-      - name: Verify caller identity
-        run: aws sts get-caller-identity
-
-      # 3) Set up kubeconfig from repo secret (base64 decode -> temp file)
-      - name: Write kubeconfig to temp file
+      - name: Verify Caller Identity
         run: |
-          echo '${{ secrets.KUBECONFIG_BASE64 }}' | tr -d '\n' | base64 -d > /tmp/kubeconfig
-          chmod 600 /tmp/kubeconfig
-          echo "TF_VAR_kubernetes_config_path=/tmp/kubeconfig" >> $GITHUB_ENV
+          aws sts get-caller-identity
 
-      # 4) Set up Terraform client
+      - name: Setup Kubeconfig
+        run: |
+          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 --decode > /tmp/kubeconfig
+          chmod 600 /tmp/kubeconfig
+          echo "TF_VAR_kube_config_path=/tmp/kubeconfig" >> $GITHUB_ENV
+          echo "KUBE_CONFIG_PATH=/tmp/kubeconfig" >> $GITHUB_ENV
+
+      - name: Setup Environment Variables for URI References
+        run: |
+          echo "TF_VAR_backend_url=${{ vars.BACKEND_URL }}" >> $GITHUB_ENV
+          echo "TF_VAR_frontend_url=${{ vars.FRONTEND_URL }}" >> $GITHUB_ENV
+          echo "TF_VAR_aws_region=${{ vars.AWS_REGION }}" >> $GITHUB_ENV
+          echo "TF_VAR_kubernetes_config_path=/tmp/kubeconfig" >> $GITHUB_ENV>> $GITHUB_ENV
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
 
-      # 5) Terraform init & apply
-      - name: Terraform init
-        working-directory: terraform
-        run: terraform init
+      - name: Terraform Init
+        run: |
+          cd terraform && terraform init
 
-      - name: Terraform apply
-        working-directory: terraform
-        run: terraform apply --auto-approve
+      - name: Terraform Apply
+        run: |
+          cd terraform && terraform apply -auto-approve
