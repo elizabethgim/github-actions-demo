@@ -1,0 +1,64 @@
+name: Calc App Destroy Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy" to confirm resource deletion'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.confirm == 'destroy' }}
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.ECR_ACCOUNT_ID }}:role/cas3135-2022118008-gha-role
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Verify Caller Identity
+        run: aws sts get-caller-identity
+
+      - name: Setup Kubeconfig
+        run: |
+          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 --decode > /tmp/kubeconfig
+          chmod 600 /tmp/kubeconfig
+          echo "TF_VAR_kubernetes_config_path=/tmp/kubeconfig" >> $GITHUB_ENV
+
+      - name: Setup Environment Variables
+        run: |
+          echo "TF_VAR_backend_url=${{ vars.BACKEND_URL }}" >> $GITHUB_ENV
+          echo "TF_VAR_frontend_url=${{ vars.FRONTEND_URL }}" >> $GITHUB_ENV
+          echo "TF_VAR_aws_region=${{ vars.AWS_REGION }}" >> $GITHUB_ENV
+          echo "TF_VAR_container_image_be=placeholder" >> $GITHUB_ENV
+          echo "TF_VAR_container_image_fe=placeholder" >> $GITHUB_ENV
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: Terraform Destroy
+        working-directory: ./terraform
+        run: terraform destroy -auto-approve
+
+      - name: Destruction Summary
+        run: |
+          echo "=========================================="
+          echo "All calc resources have been destroyed!"
+          echo "=========================================="
