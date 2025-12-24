@@ -1,0 +1,60 @@
+name: Calc App Unit Tests
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: 'Log Level'
+        required: true
+        default: 'warning'
+        type: choice
+        options:
+          - info
+          - warning
+          - debug
+
+jobs:
+  unit_test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup for NodeJS 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Install Dependencies
+        run: |
+          (cd backend && npm ci)
+
+      - name: Backend Unit Tests
+        run: |
+          (cd backend && npm test)
+
+  backend_basic_test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup for NodeJS 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Install Dependencies
+        run: |
+          (cd backend && npm ci)
+
+      - name: Health Check on Local Dev Run
+        run: |
+          cd backend
+          npm run dev &
+          sleep 5
+          curl --fail "http://localhost:8080/healthcheck"
