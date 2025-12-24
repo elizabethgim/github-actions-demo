@@ -1,64 +1,61 @@
-name: Calc App Destroy Pipeline
+name: Calc App Manual Undeployment
 
 on:
   workflow_dispatch:
     inputs:
-      confirm:
-        description: 'Type "destroy" to confirm resource deletion'
+      logLevel:
+        description: 'Log Level for Destroy'
         required: true
-        type: string
+        default: 'warning'
+        type: choice
+        options:
+          - info
+          - warning
+          - debug
 
 permissions:
-  contents: read
   id-token: write
+  contents: read
+  pull-requests: read
 
 jobs:
   destroy:
     runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.confirm == 'destroy' }}
-    
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::${{ secrets.ECR_ACCOUNT_ID }}:role/cas3135-2022118008-gha-role
-          aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Verify Caller Identity
-        run: aws sts get-caller-identity
-
-      - name: Setup Kubeconfig
-        run: |
-          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 --decode > /tmp/kubeconfig
-          chmod 600 /tmp/kubeconfig
-          echo "TF_VAR_kubernetes_config_path=/tmp/kubeconfig" >> $GITHUB_ENV
-
-      - name: Setup Environment Variables
-        run: |
-          echo "TF_VAR_backend_url=${{ vars.BACKEND_URL }}" >> $GITHUB_ENV
-          echo "TF_VAR_frontend_url=${{ vars.FRONTEND_URL }}" >> $GITHUB_ENV
-          echo "TF_VAR_aws_region=${{ vars.AWS_REGION }}" >> $GITHUB_ENV
-          echo "TF_VAR_container_image_be=placeholder" >> $GITHUB_ENV
-          echo "TF_VAR_container_image_fe=placeholder" >> $GITHUB_ENV
-
-      - name: Setup Terraform
+      - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.6.6
-
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4 
+        with:
+          role-to-assume: arn:aws:iam::975049962487:role/cas3135-2023148057-gha-role
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-terraform-destroy
+      - name: Set up Kubeconfig Secret
+        id: kubeconfig_setup
+        run: |
+          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > /tmp/kubeconfig.yaml
+        
+      - name: Fill Terraform Environment Variables
+        run: |
+          echo "TF_VAR_aws_region=${{ vars.AWS_REGION }}" >> $GITHUB_ENV
+          echo "TF_VAR_kubernetes_config_path=/tmp/kubeconfig.yaml" >> $GITHUB_ENV
+          echo "TF_VAR_container_image_be=dummy" >> $GITHUB_ENV
+          echo "TF_VAR_container_image_fe=dummy" >> $GITHUB_ENV
+          echo "TF_VAR_ecr_repository_be=${{ vars.ECR_REPOSITORY_BE }}" >> $GITHUB_ENV
+          echo "TF_VAR_ecr_repository_fe=${{ vars.ECR_REPOSITORY_FE }}" >> $GITHUB_ENV
+          echo "TF_VAR_backend_url=${{ vars.BACKEND_URL }}" >> $GITHUB_ENV
+          echo "TF_VAR_frontend_url=${{ vars.FRONTEND_URL }}" >> $GITHUB_ENV
+        
       - name: Terraform Init
-        working-directory: ./terraform
         run: terraform init
+        working-directory: ./terraform
 
       - name: Terraform Destroy
-        working-directory: ./terraform
+        id: destroy
         run: terraform destroy -auto-approve
-
-      - name: Destruction Summary
-        run: |
-          echo "=========================================="
-          echo "All calc resources have been destroyed!"
-          echo "=========================================="
+        working-directory: ./terraform
